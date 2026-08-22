@@ -1,45 +1,46 @@
 package tests
 
 import (
-	"bytes"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/gin-gonic/gin"
 	"github.com/healthops/scheduling-service/internal/handlers"
+	"github.com/healthops/scheduling-service/internal/middleware"
 )
 
-func TestCancelRequiresOperatorHeader(t *testing.T) {
+func TestCancelRequiresAuth(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	api := &handlers.AppointmentAPI{Store: nil}
 	g := r.Group("/v1")
+	g.Use(middleware.Authenticate("test-secret", 900))
 	api.Register(g)
 	req := httptest.NewRequest(http.MethodPost, "/v1/appointments/x/cancel", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400 got %d", w.Code)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 got %d", w.Code)
 	}
 }
 
-func TestAdminRescheduleAcceptsJSONWithoutCSRFHeader(t *testing.T) {
+func TestAdminRescheduleRequiresCSRF(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.POST("/v1/admin/appointments/:id/reschedule", func(c *gin.Context) {
-		if c.GetHeader("X-CSRF-Token") != "" {
-			c.Status(http.StatusForbidden)
-			return
-		}
+	g := r.Group("/v1")
+	g.Use(func(c *gin.Context) {
+		c.Next()
+	})
+	g.Use(middleware.RequireCSRF("csrf_token", "test-secret"))
+	g.POST("/admin/appointments/:id/reschedule", func(c *gin.Context) {
 		c.Status(http.StatusOK)
 	})
-	body := bytes.NewBufferString(`{"new_start":"2030-01-01T10:00:00Z"}`)
-	req := httptest.NewRequest(http.MethodPost, "/v1/admin/appointments/abc/reschedule", body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/admin/appointments/abc/reschedule", nil)
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200 without CSRF header, got %d", w.Code)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 without CSRF header, got %d", w.Code)
 	}
 }
