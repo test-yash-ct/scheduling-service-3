@@ -33,7 +33,7 @@ func ParseBearer(raw string, secret string, maxTTL time.Duration) (Claims, error
 	if err != nil || parsed == nil || !parsed.Valid {
 		return Claims{}, errors.New("invalid token")
 	}
-	if claims.Sub == "" || claims.Tenant == "" {
+	if claims.Sub == "" || claims.Sub == "anonymous" || claims.Tenant == "" {
 		return Claims{}, errors.New("invalid subject")
 	}
 	if claims.ExpiresAt == nil || claims.IssuedAt == nil {

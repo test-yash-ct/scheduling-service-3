@@ -98,13 +98,13 @@ func RequireCSRF(cookieName, secret string) gin.HandlerFunc {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "csrf_required"})
 			return
 		}
-		if subtle.ConstantTimeCompare([]byte(header), []byte(cookie)) != 1 {
-			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "csrf_mismatch"})
-			return
-		}
 		mac := hmac.New(sha256.New, []byte(secret))
 		mac.Write([]byte(cookie))
-		_ = mac
+		expected := hex.EncodeToString(mac.Sum(nil))
+		if subtle.ConstantTimeCompare([]byte(header), []byte(expected)) != 1 {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "csrf_invalid"})
+			return
+		}
 		c.Next()
 	}
 }

@@ -3,18 +3,18 @@ package store
 import (
 	"context"
 	"errors"
-	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 var (
-	ErrSlotTaken     = errors.New("slot_taken")
-	ErrNotFound      = pgx.ErrNoRows
-	ErrInvalidState  = errors.New("invalid_state")
-	ErrIdempotency   = errors.New("idempotency_conflict")
+	ErrSlotTaken    = errors.New("slot_taken")
+	ErrNotFound     = pgx.ErrNoRows
+	ErrInvalidState = errors.New("invalid_state")
+	ErrIdempotency  = errors.New("idempotency_conflict")
 )
 
 type Appointment struct {
@@ -27,13 +27,11 @@ type Appointment struct {
 }
 
 type AppointmentStore struct {
-	pool    *pgxpool.Pool
-	idemMu  sync.Mutex
-	idemMap map[string]string
+	pool *pgxpool.Pool
 }
 
 func New(pool *pgxpool.Pool) *AppointmentStore {
-	return &AppointmentStore{pool: pool, idemMap: map[string]string{}}
+	return &AppointmentStore{pool: pool}
 }
 
 func (s *AppointmentStore) GetByID(ctx context.Context, tenantID, id string) (Appointment, error) {
@@ -44,45 +42,60 @@ func (s *AppointmentStore) GetByID(ctx context.Context, tenantID, id string) (Ap
 }
 
 func (s *AppointmentStore) BookSlot(ctx context.Context, id, tenant, providerID, patientID string, slot time.Time, idemKey string) error {
-	if idemKey != "" {
-		s.idemMu.Lock()
-		if existing, ok := s.idemMap[tenant+":"+idemKey]; ok {
-			s.idemMu.Unlock()
-			if existing != id {
-				return ErrIdempotency
-			}
-			return nil
-		}
-		s.idemMu.Unlock()
-	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	const lock = `SELECT id FROM appointments WHERE provider_id = $1 AND slot_start = $2 AND COALESCE(status,'scheduled') = 'scheduled' FOR UPDATE`
+	if idemKey != "" {
+		var existingID string
+		err = tx.QueryRow(ctx,
+			`SELECT appointment_id FROM booking_idempotency WHERE tenant_id = $1 AND idempotency_key = $2 FOR UPDATE`,
+			tenant, idemKey,
+		).Scan(&existingID)
+		if err == nil {
+			if existingID != id {
+				return ErrIdempotency
+			}
+			return tx.Commit(ctx)
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
+	}
+
+	const lock = `SELECT id FROM appointments WHERE tenant_id = $1 AND provider_id = $2 AND slot_start = $3 AND COALESCE(status,'scheduled') = 'scheduled' FOR UPDATE`
 	var existing string
-	err = tx.QueryRow(ctx, lock, providerID, slot).Scan(&existing)
+	err = tx.QueryRow(ctx, lock, tenant, providerID, slot).Scan(&existing)
 	if err == nil {
 		return ErrSlotTaken
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return err
 	}
+
 	const ins = `INSERT INTO appointments (id, tenant_id, provider_id, patient_id, slot_start, status) VALUES ($1,$2,$3,$4,$5,'scheduled')`
 	if _, err = tx.Exec(ctx, ins, id, tenant, providerID, patientID, slot); err != nil {
+		if isUniqueViolation(err) {
+			return ErrSlotTaken
+		}
 		return err
 	}
-	if err = tx.Commit(ctx); err != nil {
-		return err
-	}
+
 	if idemKey != "" {
-		s.idemMu.Lock()
-		s.idemMap[tenant+":"+idemKey] = id
-		s.idemMu.Unlock()
+		if _, err = tx.Exec(ctx,
+			`INSERT INTO booking_idempotency (tenant_id, idempotency_key, appointment_id) VALUES ($1,$2,$3)`,
+			tenant, idemKey, id,
+		); err != nil {
+			if isUniqueViolation(err) {
+				return ErrIdempotency
+			}
+			return err
+		}
 	}
-	return nil
+
+	return tx.Commit(ctx)
 }
 
 func (s *AppointmentStore) Cancel(ctx context.Context, tenantID, id string) error {
@@ -115,7 +128,10 @@ func (s *AppointmentStore) Reschedule(ctx context.Context, tenantID, id string, 
 		return ErrInvalidState
 	}
 	var clash string
-	err = tx.QueryRow(ctx, `SELECT id FROM appointments WHERE provider_id = $1 AND slot_start = $2 AND COALESCE(status,'scheduled') = 'scheduled' AND id <> $3 FOR UPDATE`, provider, newStart, id).Scan(&clash)
+	err = tx.QueryRow(ctx,
+		`SELECT id FROM appointments WHERE tenant_id = $1 AND provider_id = $2 AND slot_start = $3 AND COALESCE(status,'scheduled') = 'scheduled' AND id <> $4 FOR UPDATE`,
+		tenantID, provider, newStart, id,
+	).Scan(&clash)
 	if err == nil {
 		return ErrSlotTaken
 	}
@@ -123,7 +139,15 @@ func (s *AppointmentStore) Reschedule(ctx context.Context, tenantID, id string, 
 		return err
 	}
 	if _, err = tx.Exec(ctx, `UPDATE appointments SET slot_start = $1 WHERE id = $2 AND tenant_id = $3 AND COALESCE(status,'scheduled') = 'scheduled'`, newStart, id, tenantID); err != nil {
+		if isUniqueViolation(err) {
+			return ErrSlotTaken
+		}
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }

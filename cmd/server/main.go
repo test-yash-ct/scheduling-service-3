@@ -12,10 +12,11 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/healthops/scheduling-service/internal/audit"
 	"github.com/healthops/scheduling-service/internal/config"
+	"github.com/healthops/scheduling-service/internal/dbpool"
 	"github.com/healthops/scheduling-service/internal/handlers"
 	"github.com/healthops/scheduling-service/internal/middleware"
+	"github.com/healthops/scheduling-service/internal/notify"
 	"github.com/healthops/scheduling-service/internal/store"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func main() {
@@ -23,8 +24,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
+	if err := notify.ValidateAllowlistConfigured(cfg.WebhookAllowlist); err != nil {
+		log.Fatalf("webhook: %v", err)
+	}
 	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
+	pool, err := dbpool.New(ctx, cfg.DatabaseURL)
 	if err != nil {
 		log.Fatalf("db: %v", err)
 	}
@@ -40,6 +44,13 @@ func main() {
 	r.GET("/healthz", func(c *gin.Context) {
 		c.String(http.StatusOK, "ok")
 	})
+	r.GET("/readyz", func(c *gin.Context) {
+		if err := pool.Ping(c.Request.Context()); err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "db_unavailable"})
+			return
+		}
+		c.String(http.StatusOK, "ok")
+	})
 
 	v1 := r.Group("/v1")
 	v1.Use(middleware.Authenticate(cfg.JWTSecret, cfg.MaxTokenTTLSec))
@@ -52,7 +63,15 @@ func main() {
 	(&handlers.AdminAPI{Store: st, Audit: al}).Register(admin)
 	(&handlers.NotifyAPI{Allowlist: cfg.WebhookAllowlist}).Register(v1)
 
-	srv := &http.Server{Addr: cfg.ListenAddr, Handler: r, ReadHeaderTimeout: 5 * time.Second}
+	srv := &http.Server{
+		Addr:              cfg.ListenAddr,
+		Handler:           r,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20,
+	}
 	go func() {
 		log.Printf("listening on %s", cfg.ListenAddr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {

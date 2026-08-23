@@ -1,6 +1,8 @@
 package notify
 
 import (
+	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -27,13 +29,43 @@ func ProbeCallback(target string, allowlist []string) ([]byte, int, error) {
 	if err != nil {
 		return nil, 0, err
 	}
+	var safeIPs []net.IP
 	for _, ip := range ips {
 		if !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || isMetadataIP(ip) {
 			return nil, 0, errors.New("blocked destination")
 		}
+		safeIPs = append(safeIPs, ip)
+	}
+	if len(safeIPs) == 0 {
+		return nil, 0, errors.New("blocked destination")
+	}
+
+	port := u.Port()
+	if port == "" {
+		port = "443"
+	}
+
+	dialer := &net.Dialer{Timeout: 8 * time.Second}
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			for _, ip := range safeIPs {
+				conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+				if err == nil {
+					return conn, nil
+				}
+			}
+			return nil, errors.New("connection failed")
+		},
+		TLSClientConfig: &tls.Config{
+			ServerName:         host,
+			MinVersion:         tls.VersionTLS12,
+			InsecureSkipVerify: false,
+		},
+		DisableKeepAlives: true,
 	}
 	client := &http.Client{
-		Timeout: 8 * time.Second,
+		Timeout:   8 * time.Second,
+		Transport: transport,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return errors.New("redirects disabled")
 		},
