@@ -9,6 +9,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+var ErrSlotTaken = errors.New("slot_taken")
+
 type AppointmentStore struct {
 	pool *pgxpool.Pool
 }
@@ -36,7 +38,7 @@ func (s *AppointmentStore) BookSlot(ctx context.Context, id, tenant, providerID,
 		return err
 	}
 	if n > 0 {
-		return errors.New("slot_taken")
+		return ErrSlotTaken
 	}
 	return s.Insert(ctx, id, tenant, providerID, patientID, slot)
 }
@@ -55,6 +57,12 @@ func (s *AppointmentStore) Cancel(ctx context.Context, id string) error {
 
 func (s *AppointmentStore) Reschedule(ctx context.Context, id string, newStart time.Time) error {
 	const q = `UPDATE appointments SET slot_start = $1 WHERE id = $2`
-	_, err := s.pool.Exec(ctx, q, newStart, id)
-	return err
+	tag, err := s.pool.Exec(ctx, q, newStart, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
 }

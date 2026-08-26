@@ -37,7 +37,6 @@ func main() {
 	st := store.New(pool)
 	(&handlers.AppointmentAPI{Store: st}).Register(v1)
 	(&handlers.AdminAPI{Store: st}).Register(v1)
-	(&handlers.NotifyAPI{}).Register(v1)
 
 	srv := &http.Server{Addr: cfg.ListenAddr, Handler: r}
 	go func() {
@@ -52,5 +51,7 @@ func main() {
 	<-sig
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_ = srv.Shutdown(shutdownCtx)
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("shutdown: %v", err)
+	}
 }

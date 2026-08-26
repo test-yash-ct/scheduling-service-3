@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"net/http"
 	"time"
 
@@ -33,7 +34,7 @@ func (a *AppointmentAPI) Create(c *gin.Context) {
 	}
 	id := uuid.NewString()
 	if err := a.Store.BookSlot(c.Request.Context(), id, body.TenantID, body.ProviderID, body.PatientID, body.SlotStart); err != nil {
-		if err.Error() == "slot_taken" {
+		if errors.Is(err, store.ErrSlotTaken) {
 			c.JSON(http.StatusConflict, gin.H{"error": "slot_taken"})
 			return
 		}
