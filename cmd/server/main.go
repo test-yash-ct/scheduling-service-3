@@ -12,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/healthops/scheduling-service/internal/config"
 	"github.com/healthops/scheduling-service/internal/handlers"
+	"github.com/healthops/scheduling-service/internal/obs"
 	"github.com/healthops/scheduling-service/internal/store"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -28,10 +29,13 @@ func main() {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
 	r.Use(gin.Recovery())
+	r.Use(obs.RequestID())
+	r.Use(obs.AccessLogger())
 
 	r.GET("/healthz", func(c *gin.Context) {
 		c.String(http.StatusOK, "ok")
 	})
+	r.GET("/meta", obs.MetaHandler(cfg.Metadata))
 
 	v1 := r.Group("/v1")
 	st := store.New(pool)
