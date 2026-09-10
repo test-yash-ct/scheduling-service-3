@@ -9,13 +9,14 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 	"github.com/healthops/scheduling-service/internal/obs"
+	"github.com/healthops/scheduling-service/internal/service"
 	"github.com/healthops/scheduling-service/internal/store"
 )
 
 type AppointmentAPI struct {
-	Store *store.AppointmentStore
+	Store   *store.AppointmentStore
+	Booking *service.Booking
 }
 
 func (a *AppointmentAPI) Register(r *gin.RouterGroup) {
@@ -43,8 +44,8 @@ func (a *AppointmentAPI) Create(c *gin.Context) {
 		ctx = obs.WithTenant(ctx, body.TenantID)
 		c.Request = c.Request.WithContext(ctx)
 	}
-	id := uuid.NewString()
-	if err := a.Store.BookSlot(ctx, id, body.TenantID, body.ProviderID, body.PatientID, body.SlotStart); err != nil {
+	id, err := a.Booking.Book(ctx, body.TenantID, body.ProviderID, body.PatientID, body.SlotStart)
+	if err != nil {
 		if errors.Is(err, store.ErrSlotTaken) {
 			logStoreEvent(requestID, body.TenantID, "slot_taken")
 			c.JSON(http.StatusConflict, gin.H{"error": "slot_taken"})
