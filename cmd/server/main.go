@@ -11,8 +11,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/healthops/scheduling-service/internal/config"
+	"github.com/healthops/scheduling-service/internal/events"
 	"github.com/healthops/scheduling-service/internal/handlers"
 	"github.com/healthops/scheduling-service/internal/obs"
+	"github.com/healthops/scheduling-service/internal/service"
 	"github.com/healthops/scheduling-service/internal/store"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -39,7 +41,9 @@ func main() {
 
 	v1 := r.Group("/v1")
 	st := store.New(pool)
-	(&handlers.AppointmentAPI{Store: st}).Register(v1)
+	outbox := events.NewMemory()
+	booking := service.NewBooking(st, outbox)
+	(&handlers.AppointmentAPI{Store: st, Booking: booking}).Register(v1)
 	(&handlers.AdminAPI{Store: st}).Register(v1)
 
 	srv := &http.Server{Addr: cfg.ListenAddr, Handler: r}
