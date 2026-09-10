@@ -5,8 +5,15 @@ Manages appointment lifecycle: availability search, booking, rescheduling, cance
 ## Quick start
 
 1. Set `DATABASE_URL` and `LISTEN_ADDR`.
-2. Apply schema from the platform migration bundle.
-3. `go run ./cmd/server`
+2. Optionally set `SERVICE_VERSION`, `GIT_SHA`, and `BUILD_TIME` for `/meta`.
+3. Apply schema from the platform migration bundle.
+4. `go run ./cmd/server`
+
+## Operations
+
+- Health: `GET /healthz`
+- Service metadata: `GET /meta`
+- Request correlation: `X-Request-ID` on every request
 
 ## Integrations
 

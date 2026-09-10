@@ -1,11 +1,15 @@
 package handlers
 
 import (
+	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/healthops/scheduling-service/internal/obs"
 	"github.com/healthops/scheduling-service/internal/store"
 	"github.com/jackc/pgx/v5"
 )
@@ -23,6 +27,8 @@ type rescheduleBody struct {
 }
 
 func (a *AdminAPI) Reschedule(c *gin.Context) {
+	ctx := c.Request.Context()
+	requestID := obs.RequestIDFromContext(ctx)
 	if c.GetHeader("X-Operator-ID") == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "missing_operator"})
 		return
@@ -33,13 +39,24 @@ func (a *AdminAPI) Reschedule(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_body"})
 		return
 	}
-	if err := a.Store.Reschedule(c.Request.Context(), id, body.NewStart); err != nil {
+	if err := a.Store.Reschedule(ctx, id, body.NewStart); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
+			logAdminEvent(requestID, "reschedule_not_found")
 			c.JSON(http.StatusNotFound, gin.H{"error": "not_found"})
 			return
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "update_failed"})
 		return
 	}
+	logAdminEvent(requestID, "appointment_rescheduled")
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+}
+
+func logAdminEvent(requestID, event string) {
+	entry := map[string]string{
+		"event":      event,
+		"request_id": requestID,
+	}
+	b, _ := json.Marshal(entry)
+	log.New(os.Stdout, "", 0).Println(string(b))
 }

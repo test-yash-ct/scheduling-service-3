@@ -1,5 +1,13 @@
 # Scheduling Service API
 
+## Request correlation
+
+Supply `X-Request-ID` to correlate logs across services. The response echoes the same header. Access logs are emitted as JSON with `request_id`, `tenant`, `method`, `path`, `status`, and `duration_ms`.
+
+## `GET /meta`
+
+Returns `service`, `version`, `build_time`, and `git_sha` from `SERVICE_VERSION`, `BUILD_TIME`, and `GIT_SHA`.
+
 ## `POST /v1/appointments`
 
 Creates an appointment for `provider_id`, `slot_start`, `patient_id`.
